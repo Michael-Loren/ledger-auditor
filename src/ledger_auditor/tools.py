@@ -1,0 +1,166 @@
+"""Tools exposed to the audit agent.
+
+Design rule: the LLM never does arithmetic and never sees the whole dataset.
+It searches documents, filters transactions, and delegates math to a
+deterministic calculator — then must cite what it used."""
+from __future__ import annotations
+
+import ast
+import operator as op
+
+from .models import Transaction
+from .retrieval import HybridRetriever
+
+# ----------------------------------------------------------------- calculator
+_OPS = {ast.Add: op.add, ast.Sub: op.sub, ast.Mult: op.mul, ast.Div: op.truediv,
+        ast.Pow: op.pow, ast.USub: op.neg, ast.UAdd: op.pos, ast.Mod: op.mod}
+
+
+def safe_calculate(expression: str) -> float:
+    """Evaluate an arithmetic expression with an AST whitelist (no eval())."""
+    def _eval(node):
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return node.value
+        if isinstance(node, ast.BinOp) and type(node.op) in _OPS:
+            return _OPS[type(node.op)](_eval(node.left), _eval(node.right))
+        if isinstance(node, ast.UnaryOp) and type(node.op) in _OPS:
+            return _OPS[type(node.op)](_eval(node.operand))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id in ("round", "abs", "min", "max", "sum"):
+            fn = {"round": round, "abs": abs, "min": min, "max": max, "sum": sum}[node.func.id]
+            return fn(*[_eval(a) for a in node.args])
+        if isinstance(node, (ast.List, ast.Tuple)):
+            return [_eval(e) for e in node.elts]
+        raise ValueError(f"disallowed expression element: {ast.dump(node)}")
+    return _eval(ast.parse(expression, mode="eval"))
+
+
+# ----------------------------------------------------------------- txn engine
+class TransactionStore:
+    def __init__(self, txns: list[Transaction]):
+        self.txns = txns
+
+    def query(self, description_contains: str = "", category: str = "",
+              date_from: str = "", date_to: str = "",
+              min_amount: float | None = None, max_amount: float | None = None,
+              limit: int = 40) -> dict:
+        rows = []
+        for t in self.txns:
+            if description_contains and description_contains.lower() not in t.description.lower():
+                continue
+            if category and t.category != category:
+                continue
+            if date_from and t.date < date_from:
+                continue
+            if date_to and t.date > date_to:
+                continue
+            if min_amount is not None and t.amount < min_amount:
+                continue
+            if max_amount is not None and t.amount > max_amount:
+                continue
+            rows.append(t)
+        total = round(sum(t.amount for t in rows), 2)
+        return {
+            "count": len(rows),
+            "sum_amount": total,
+            "rows": [t.to_dict() for t in rows[:limit]],
+            "truncated": len(rows) > limit,
+        }
+
+
+# --------------------------------------------------------- Anthropic tool defs
+TOOL_DEFINITIONS = [
+    {
+        "name": "search_documents",
+        "description": "Semantic + keyword search over the user's documents "
+                       "(lease, insurance policy). Returns the most relevant "
+                       "sections with doc_id and section heading. Use this for "
+                       "anything about contractual terms, limits, or obligations.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "doc_filter": {"type": "string",
+                               "description": "Optional: restrict to one doc_id, e.g. 'lease'."},
+                "k": {"type": "integer", "default": 5},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "query_transactions",
+        "description": "Filter the normalized bank-transaction table. Amounts are "
+                       "negative for debits. Returns matching rows plus count and "
+                       "sum. Use this for anything about actual money movement.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "description_contains": {"type": "string"},
+                "category": {"type": "string"},
+                "date_from": {"type": "string", "description": "ISO date inclusive"},
+                "date_to": {"type": "string", "description": "ISO date inclusive"},
+                "min_amount": {"type": "number"},
+                "max_amount": {"type": "number"},
+            },
+        },
+    },
+    {
+        "name": "calculate",
+        "description": "Deterministic arithmetic. ALWAYS use this instead of doing "
+                       "math yourself. Supports + - * / ** % round abs min max sum.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"expression": {"type": "string"}},
+            "required": ["expression"],
+        },
+    },
+    {
+        "name": "submit_answer",
+        "description": "Submit the final answer. Every factual claim that comes from "
+                       "a document MUST have a citation whose `quote` is copied "
+                       "verbatim from a retrieved section.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "answer": {"type": "string"},
+                "citations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "doc_id": {"type": "string"},
+                            "section": {"type": "string"},
+                            "quote": {"type": "string"},
+                        },
+                        "required": ["doc_id", "quote"],
+                    },
+                },
+            },
+            "required": ["answer"],
+        },
+    },
+]
+
+
+class ToolExecutor:
+    def __init__(self, retriever: HybridRetriever, store: TransactionStore):
+        self.retriever = retriever
+        self.store = store
+
+    def execute(self, name: str, args: dict):
+        if name == "search_documents":
+            results = self.retriever.search(
+                args["query"], k=args.get("k", 5),
+                doc_filter=args.get("doc_filter") or None)
+            return [{"doc_id": r.chunk.doc_id, "section": r.chunk.section,
+                     "text": r.chunk.text, "rank": r.rank} for r in results]
+        if name == "query_transactions":
+            return self.store.query(**{k: v for k, v in args.items() if v not in ("", None)})
+        if name == "calculate":
+            try:
+                return {"result": safe_calculate(args["expression"])}
+            except Exception as e:  # let the model see and correct its mistake
+                return {"error": str(e)}
+        raise ValueError(f"unknown tool {name}")
