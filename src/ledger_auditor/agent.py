@@ -48,6 +48,16 @@ def _normalize(s: str) -> str:
     return " ".join(s.lower().split())
 
 
+def _extract_json(text: str) -> str:
+    """Models sometimes wrap JSON in markdown fences or preamble text;
+    pull out the first {...} object rather than trusting raw output."""
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError(f"no JSON object in verifier output: {text[:80]!r}")
+    return text[start:end + 1]
+
+
 class AuditAgent:
     def __init__(self, retriever: HybridRetriever, store: TransactionStore,
                  model: str = DEFAULT_MODEL, client=None):
@@ -118,7 +128,8 @@ class AuditAgent:
             r = self.client.messages.create(
                 model=self.model, max_tokens=300, system=VERIFIER_PROMPT,
                 messages=[{"role": "user", "content": payload}])
-            verdict = json.loads("".join(b.text for b in r.content if b.type == "text"))
+            text = "".join(b.text for b in r.content if b.type == "text")
+            verdict = json.loads(_extract_json(text))
             ans.verified = bool(verdict.get("verified"))
             ans.verification_notes = verdict.get("notes", "")
         except Exception as e:
