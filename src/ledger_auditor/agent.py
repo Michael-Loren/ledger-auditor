@@ -54,22 +54,11 @@ answer, and the exact source quotes, check two things:
    policy claims need quote support.
 2. The answer's arithmetic must be internally consistent (e.g. if it says
    $37/month for 6 months, the stated total must be $222).
-Respond with the JSON verdict only — no preamble, no analysis text:
-{"verified": true/false, "notes": "<one sentence>"}"""
+Submit your verdict with the `verdict` tool."""
 
 
 def _normalize(s: str) -> str:
     return " ".join(s.lower().split())
-
-
-def _extract_json(text: str) -> str:
-    """Models sometimes wrap JSON in markdown fences or preamble text;
-    pull out the first {...} object rather than trusting raw output."""
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end <= start:
-        raise ValueError(f"no JSON object in verifier output: {text[:80]!r}")
-    return text[start:end + 1]
 
 
 class AuditAgent:
@@ -148,15 +137,29 @@ class AuditAgent:
         payload = json.dumps({
             "question": ans.question, "answer": ans.answer,
             "quotes": [{"doc": c.doc_id, "quote": c.quote} for c in ans.citations]})
+        # The verdict comes back as a forced tool call, so its shape is
+        # guaranteed by the API — no JSON parsing of free text. (A prefill
+        # approach failed here: newer models reject assistant prefill.)
+        verdict_tool = {
+            "name": "verdict",
+            "description": "Submit the verification verdict.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "verified": {"type": "boolean"},
+                    "notes": {"type": "string",
+                              "description": "one-sentence justification"},
+                },
+                "required": ["verified", "notes"],
+            },
+        }
         try:
             r = self.client.messages.create(
                 model=self.model, max_tokens=500, system=VERIFIER_PROMPT,
-                messages=[{"role": "user", "content": payload},
-                          # prefill forces JSON from the first token —
-                          # the model cannot ramble past the budget
-                          {"role": "assistant", "content": "{"}])
-            text = "{" + "".join(b.text for b in r.content if b.type == "text")
-            verdict = json.loads(_extract_json(text))
+                tools=[verdict_tool],
+                tool_choice={"type": "tool", "name": "verdict"},
+                messages=[{"role": "user", "content": payload}])
+            verdict = next(b.input for b in r.content if b.type == "tool_use")
             ans.verified = bool(verdict.get("verified"))
             ans.verification_notes = verdict.get("notes", "")
         except Exception as e:

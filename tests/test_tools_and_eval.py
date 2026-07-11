@@ -5,18 +5,6 @@ from ledger_auditor.evaluate import score_answer
 from ledger_auditor.tools import safe_calculate
 
 
-def test_extract_json_handles_fenced_output():
-    """Regression: verifier model wrapped its JSON in markdown fences."""
-    import json
-    from ledger_auditor.agent import _extract_json
-    for raw in ('{"verified": true, "notes": "ok"}',
-                '```json\n{"verified": true, "notes": "ok"}\n```',
-                'Here is my verdict:\n{"verified": true, "notes": "ok"}'):
-        assert json.loads(_extract_json(raw))["verified"] is True
-    with pytest.raises(ValueError):
-        _extract_json("no json here")
-
-
 def test_calculator_basic():
     assert safe_calculate("1850 * 1.03") == pytest.approx(1905.5)
     assert safe_calculate("round((1942.50 - 1905.50) * 6, 2)") == 222.0
