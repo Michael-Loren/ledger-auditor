@@ -151,6 +151,7 @@ tests/                       17 tests incl. retrieval quality gates, parser cros
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — data flow, retrieval and fusion rationale, agent loop, verifier design, eval methodology
+- [docs/LAB_NOTES.md](docs/LAB_NOTES.md) — chronological log of every live run, failure, diagnosis, and fix (the eval-driven debugging story)
 - [docs/EXTENDING.md](docs/EXTENDING.md) — adding document types, bank parsers, eval questions, dense backends
 - [CLAUDE.md](CLAUDE.md) — orientation file for AI coding agents (commands, code map, architectural invariants)
 
