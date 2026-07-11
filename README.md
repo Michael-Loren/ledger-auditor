@@ -103,18 +103,35 @@ Two layers, so the project is measurable with or without an API key.
 
 The honest finding: **on this corpus, BM25 alone wins.** The eval questions share vocabulary with the contract language, and dense retrieval's characteristic failures show up exactly where you'd predict — rare proper nouns ("Granite Shield", "Illinois") that embeddings underweight but BM25 matches exactly, and dollar-figure clauses where semantic similarity is diffuse. Fusion mostly recovers BM25's answers but pays a small tax at low k when a confident-but-wrong dense ranking pushes the right chunk down (hybrid@1: 0.742 < both rankers — RRF averages disagreement instead of resolving it). Hybrid's expected payoff — paraphrased queries lexically distant from the source ("how much did I put down when I moved in?") — is underrepresented in this eval set, which is a measured limitation, not a hidden one. The retrieval eval is wired into CI as a quality gate: `test_hybrid_recall_floor` fails the build if hybrid recall@5 drops below 0.85.
 
-**End-to-end eval** (`eval --mode full`) runs the agent on all 50 questions and reports:
+**End-to-end eval** (`eval --mode full`) runs the agent (claude-sonnet-4-6) on all 50 questions. Results, stable across repeated runs:
 
-- *answer accuracy* — numeric ground truth within tolerance, keyword match otherwise
-- *citation pass rate* — fraction of answers whose every quote survives the verbatim check
-- accuracy broken down by category (lookup / aggregate / cross-document audit)
+| Metric | Score |
+|--------|-------|
+| Answer accuracy (overall) | **0.98** (49/50) |
+| — lookup questions (20) | 1.00 |
+| — aggregate questions (16) | 1.00 |
+| — cross-document audit questions (14) | 0.93 |
+| Citation pass rate (verifier) | **0.96** |
+
+Scoring: numeric ground truth within tolerance where available; otherwise ≥50% of the expected answer's numbers or keywords must appear. The full audit sweep (`ledger-auditor audit`) finds **6/6 planted anomalies** with correct dollar amounts.
+
+The recurring miss is always in the same family: when a question involves an *overcharge*, the agent occasionally reports the full price increase (charged − old price) instead of charged − contractual maximum — a semantic slip about which delta matters, which no calculator tool can prevent. A system-prompt rule reduced it from consistent to ~1-in-50; it remains the documented known failure mode.
 
 ## Failure modes observed (and what was done)
+
+Found during construction:
 
 - **Fabricated citations.** Early versions paraphrased quotes. Fixed by making the verbatim check a hard gate and instructing the agent that paraphrased quotes will be rejected.
 - **LLM arithmetic drift.** Sums over 40+ transactions were unreliable. Fixed by returning `count`/`sum` from the transaction store itself and banning mental math.
 - **Clause splitting.** Fixed-window chunking split the late-fee clause from its dollar amount. Fixed with heading-aware chunking; `test_chunks_are_section_scoped` guards it.
 - **PDF table extraction.** `pdfplumber` row order is not guaranteed across engines; the CSV/PDF cross-validation test (`test_pdf_and_csv_parsers_agree`) pins parser agreement on identical months.
+
+Found by live runs and the eval loop (each fixed with a regression test and its own commit):
+
+- **Duplicate-detection false negative.** The agent scanned a row-limited transaction view, missed a planted duplicate charge, and confidently reported "none found." Fix: a `find_duplicates` tool that scans *all* rows deterministically, plus `group_by` aggregation so the agent never counts rows itself.
+- **Truncated final answers.** Long audit reports hit the per-turn token ceiling mid-`submit_answer`, crashing the loop. Fix: larger budget + malformed submissions are returned to the agent as error tool-results so it retries.
+- **Verifier fragility.** The entailment verdict was parsed from free text, which broke twice (markdown-fenced JSON; preamble exhausting the token budget). Final fix eliminates the failure class: the verdict comes back through a forced tool call, so its shape is API-guaranteed. An interim prefill-based fix passed all unit tests and failed on the live API — some failure modes only end-to-end evals catch.
+- **Scorer false negative.** A correct answer failed keyword scoring because its wording diverged from the expected phrasing while containing the exact discriminating dollar amounts. The scorer now also matches on the expected answer's numbers. Evaluating the evaluator is part of the job.
 
 ## Repo layout
 
@@ -127,7 +144,8 @@ src/ledger_auditor/
   agent.py                   tool-use loop + two-stage verifier
   evaluate.py                retrieval + end-to-end eval harness
   cli.py                     ingest / ask / audit / eval
-tests/                       14 tests incl. retrieval quality gates and parser cross-validation
+tests/                       17 tests incl. retrieval quality gates, parser cross-validation,
+                             and regression tests for every failure the eval loop caught
 ```
 
 ## Documentation
