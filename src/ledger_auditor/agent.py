@@ -72,7 +72,7 @@ class AuditAgent:
         messages = [{"role": "user", "content": question}]
         for _ in range(MAX_TURNS):
             response = self.client.messages.create(
-                model=self.model, max_tokens=2000, system=SYSTEM_PROMPT,
+                model=self.model, max_tokens=8000, system=SYSTEM_PROMPT,
                 tools=TOOL_DEFINITIONS, messages=messages)
 
             tool_uses = [b for b in response.content if b.type == "tool_use"]
@@ -85,6 +85,16 @@ class AuditAgent:
             results = []
             for tu in tool_uses:
                 if tu.name == "submit_answer":
+                    if not tu.input.get("answer"):
+                        # truncated/malformed submission (e.g. max_tokens hit
+                        # mid-tool-call) — tell the model instead of crashing
+                        results.append({
+                            "type": "tool_result", "tool_use_id": tu.id,
+                            "is_error": True,
+                            "content": "submit_answer arrived without an "
+                                       "'answer' field (possibly truncated). "
+                                       "Submit again, more concisely."})
+                        continue
                     citations = [Citation(doc_id=c.get("doc_id", ""),
                                           section=c.get("section", ""),
                                           quote=c.get("quote", ""))
