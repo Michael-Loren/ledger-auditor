@@ -92,16 +92,16 @@ Because the generator also computes ground truth, the **50-question eval set is 
 
 Two layers, so the project is measurable with or without an API key.
 
-**Retrieval benchmark** (no key needed; numbers below from the dependency-light TF-IDF dense backend, k = section-level recall on the 31 document-grounded questions):
+**Retrieval benchmark** (no key needed; section-level recall on the 31 document-grounded questions). Two dense backends: MiniLM (`sentence-transformers/all-MiniLM-L6-v2`, the real one) and the dependency-light TF-IDF fallback used in CI:
 
-| recall@k | BM25 | dense | hybrid (RRF) |
-|----------|------|-------|--------------|
-| @1 | 0.806 | 0.774 | 0.774 |
-| @2 | 0.935 | 0.903 | 0.903 |
-| @3 | **1.000** | 0.935 | **1.000** |
-| @5 | 1.000 | 1.000 | 1.000 |
+| recall@k | BM25 | MiniLM | hybrid (BM25+MiniLM) | TF-IDF | hybrid (BM25+TF-IDF) |
+|----------|------|--------|----------------------|--------|-----------------------|
+| @1 | 0.806 | 0.806 | 0.742 | 0.774 | 0.774 |
+| @2 | 0.935 | 0.839 | 0.935 | 0.903 | 0.903 |
+| @3 | **1.000** | 0.839 | 0.935 | 0.935 | **1.000** |
+| @5 | 1.000 | 0.935 | 1.000 | 1.000 | 1.000 |
 
-An honest finding: on this corpus BM25 alone is strong, because the eval questions are lexically close to the contract language ("late fee" appears in both). Hybrid retrieval earns its keep on paraphrased queries ("how much did I put down when I moved in?") and with the real `sentence-transformers` backend (`pip install -e ".[dense]"`). The retrieval eval is wired into CI as a quality gate: `test_hybrid_recall_floor` fails the build if hybrid recall@5 drops below 0.85.
+The honest finding: **on this corpus, BM25 alone wins.** The eval questions share vocabulary with the contract language, and dense retrieval's characteristic failures show up exactly where you'd predict — rare proper nouns ("Granite Shield", "Illinois") that embeddings underweight but BM25 matches exactly, and dollar-figure clauses where semantic similarity is diffuse. Fusion mostly recovers BM25's answers but pays a small tax at low k when a confident-but-wrong dense ranking pushes the right chunk down (hybrid@1: 0.742 < both rankers — RRF averages disagreement instead of resolving it). Hybrid's expected payoff — paraphrased queries lexically distant from the source ("how much did I put down when I moved in?") — is underrepresented in this eval set, which is a measured limitation, not a hidden one. The retrieval eval is wired into CI as a quality gate: `test_hybrid_recall_floor` fails the build if hybrid recall@5 drops below 0.85.
 
 **End-to-end eval** (`eval --mode full`) runs the agent on all 50 questions and reports:
 
