@@ -18,7 +18,7 @@ pip install -e ".[dense,dev]"          # + real sentence-transformers backend
 
 python scripts/generate_data.py        # REQUIRED FIRST: creates data/ (gitignored)
 
-pytest                                 # 14 tests; no API key or network needed
+pytest                                 # 17 tests; no API key or network needed
 ledger-auditor ingest                  # corpus stats sanity check
 ledger-auditor eval --mode retrieval   # retrieval benchmark, no API key needed
 ledger-auditor eval --mode retrieval --k 3   # stricter k

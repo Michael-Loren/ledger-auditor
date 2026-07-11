@@ -65,7 +65,7 @@ ledger-auditor ingest                  # parse everything, print corpus stats
 
 # no API key needed:
 ledger-auditor eval --mode retrieval   # retrieval benchmark
-pytest                                 # 14 tests incl. retrieval quality gates
+pytest                                 # 17 tests incl. retrieval quality gates
 
 # with ANTHROPIC_API_KEY set:
 ledger-auditor ask "Was the April late fee charged correctly?"
