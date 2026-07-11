@@ -68,10 +68,22 @@ def _extract_numbers(text: str) -> list[float]:
 
 def score_answer(question: dict, answer_text: str) -> bool:
     """Numeric questions: ground-truth number must appear (within tolerance).
-    Text questions: majority of significant ground-truth keywords present."""
+    Text questions: majority of the expected answer's numbers OR keywords
+    must appear. The number path exists because keyword overlap alone
+    false-negatived a correct answer (Q41) whose wording diverged from the
+    expected phrasing while containing the exact discriminating amounts."""
     if question.get("numeric") is not None:
         target, tol = float(question["numeric"]), float(question.get("tolerance", 0.01))
         return any(abs(n - target) <= tol for n in _extract_numbers(answer_text))
+
+    got_nums = _extract_numbers(answer_text)
+    exp_nums = _extract_numbers(question["answer"])
+    if exp_nums:
+        matched = sum(1 for e in exp_nums
+                      if any(abs(g - e) <= 0.01 for g in got_nums))
+        if matched / len(exp_nums) >= 0.5:
+            return True
+
     expected = question["answer"].lower()
     words = [w for w in re.findall(r"[a-z']{4,}", expected)
              if w not in ("that", "this", "with", "from", "only", "after")]

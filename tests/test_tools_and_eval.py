@@ -68,6 +68,19 @@ def test_score_answer_keywords():
     assert score_answer(q, "Flood damage is excluded under the policy.")
 
 
+def test_score_answer_matches_on_numbers_when_wording_diverges():
+    """Regression (eval Q41): correct answer scored FAIL because its prose
+    shared few keywords with the expected phrasing — but it contained the
+    exact discriminating amounts."""
+    q = {"numeric": None,
+         "answer": "No. $24.75 was drafted; the declarations page lists "
+                   "$18.50/month, and changes apply only at renewal."}
+    divergent = ("No — the autopay does NOT match. You are being overcharged: "
+                 "the policy sets the premium at $18.50 but $24.75 has been "
+                 "charged since September.")
+    assert score_answer(q, divergent)
+
+
 def test_citation_verification_catches_fabrication(retriever_and_store):
     """The deterministic verifier must reject quotes that aren't in the corpus."""
     from ledger_auditor.agent import AuditAgent

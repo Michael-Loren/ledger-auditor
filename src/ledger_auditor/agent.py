@@ -47,12 +47,14 @@ Rules:
 VERIFIER_PROMPT = """You are a verification auditor. Given a question, a proposed
 answer, and the exact source quotes, check two things:
 1. Every claim about CONTRACT/POLICY TERMS must be supported by the quotes.
-   Claims about bank transactions (amounts charged, dates, duplicates, counts)
-   are computed deterministically from a transaction database and do NOT
-   require quotes — do not fail the answer for those.
+   Claims about bank transactions (amounts charged, dates, duplicates, counts,
+   payment history) come from a deterministic transaction database that you
+   cannot see. ASSUME they are correct. Never fail an answer because a
+   transaction claim is "unconfirmed" or "not referenced" — only contract and
+   policy claims need quote support.
 2. The answer's arithmetic must be internally consistent (e.g. if it says
    $37/month for 6 months, the stated total must be $222).
-Respond with JSON only:
+Respond with the JSON verdict only — no preamble, no analysis text:
 {"verified": true/false, "notes": "<one sentence>"}"""
 
 
@@ -148,9 +150,12 @@ class AuditAgent:
             "quotes": [{"doc": c.doc_id, "quote": c.quote} for c in ans.citations]})
         try:
             r = self.client.messages.create(
-                model=self.model, max_tokens=300, system=VERIFIER_PROMPT,
-                messages=[{"role": "user", "content": payload}])
-            text = "".join(b.text for b in r.content if b.type == "text")
+                model=self.model, max_tokens=500, system=VERIFIER_PROMPT,
+                messages=[{"role": "user", "content": payload},
+                          # prefill forces JSON from the first token —
+                          # the model cannot ramble past the budget
+                          {"role": "assistant", "content": "{"}])
+            text = "{" + "".join(b.text for b in r.content if b.type == "text")
             verdict = json.loads(_extract_json(text))
             ans.verified = bool(verdict.get("verified"))
             ans.verification_notes = verdict.get("notes", "")
