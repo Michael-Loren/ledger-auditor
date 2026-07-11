@@ -35,15 +35,24 @@ Rules:
   (e.g. group_by='amount' to count charges at each price tier).
 - For duplicate detection, ALWAYS use find_duplicates; never scan rows manually.
 - Never assert a contractual term without retrieving it via search_documents.
-- When you find a discrepancy, quantify it (per month and total).
+- When you find a discrepancy, quantify it (per month and total). An
+  overcharge is (amount actually charged) minus (maximum the contract
+  allows) — never the full increase. Double-check that every total you
+  state equals the per-unit amount times the count you stated.
 - Finish by calling submit_answer. Every document-derived claim needs a
   citation whose quote is copied VERBATIM from a retrieved section. Do not
   paraphrase inside quotes.
 - If the documents do not contain the answer, say so rather than guessing."""
 
 VERIFIER_PROMPT = """You are a verification auditor. Given a question, a proposed
-answer, and the exact source quotes, decide whether the quotes support every
-factual claim in the answer. Respond with JSON only:
+answer, and the exact source quotes, check two things:
+1. Every claim about CONTRACT/POLICY TERMS must be supported by the quotes.
+   Claims about bank transactions (amounts charged, dates, duplicates, counts)
+   are computed deterministically from a transaction database and do NOT
+   require quotes — do not fail the answer for those.
+2. The answer's arithmetic must be internally consistent (e.g. if it says
+   $37/month for 6 months, the stated total must be $222).
+Respond with JSON only:
 {"verified": true/false, "notes": "<one sentence>"}"""
 
 
