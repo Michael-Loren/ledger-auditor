@@ -38,6 +38,25 @@ def test_transaction_query_filters(retriever_and_store):
     assert rent["count"] == 1 and rent["rows"][0]["amount"] == -1942.50
 
 
+def test_find_duplicates_catches_cleanco(retriever_and_store):
+    """Regression: the agent missed the duplicate CLEANCO charge because
+    the row-limited query view can't scan all 306 transactions."""
+    _, store = retriever_and_store
+    res = store.find_duplicates()
+    assert len(res["duplicate_groups"]) == 1
+    d = res["duplicate_groups"][0]
+    assert d["description"] == "CLEANCO HOME SERVICES"
+    assert d["date"] == "2025-03-14" and d["occurrences"] == 2
+
+
+def test_group_by_amount_counts_price_tiers(retriever_and_store):
+    """Regression: the agent miscounted STREAMAX months (said 6, was 5)."""
+    _, store = retriever_and_store
+    res = store.query(description_contains="STREAMAX", group_by="amount")
+    tiers = {k: v["count"] for k, v in res["groups"].items()}
+    assert tiers == {"-12.99": 4, "-15.99": 5, "-17.99": 3}
+
+
 def test_score_answer_numeric_tolerance():
     q = {"numeric": 222.0, "tolerance": 0.01, "answer": "$222.00"}
     assert score_answer(q, "The total overcharge is $222.00 across six months.")

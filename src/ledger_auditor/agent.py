@@ -31,6 +31,9 @@ Rules:
 - Decompose the question first: which documents govern it, and which
   transactions are relevant? Then gather BOTH sides before concluding.
 - Never do arithmetic yourself — use the calculate tool.
+- Never count rows or months yourself — use query_transactions with group_by
+  (e.g. group_by='amount' to count charges at each price tier).
+- For duplicate detection, ALWAYS use find_duplicates; never scan rows manually.
 - Never assert a contractual term without retrieving it via search_documents.
 - When you find a discrepancy, quantify it (per month and total).
 - Finish by calling submit_answer. Every document-derived claim needs a

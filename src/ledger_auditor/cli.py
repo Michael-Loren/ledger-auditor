@@ -81,7 +81,9 @@ def main(argv=None):
         print(f"\nverified: {ans.verified}  ({ans.verification_notes})")
     elif args.cmd == "audit":
         ans = agent.audit(verbose=args.verbose)
-        print(f"\n{ans.answer}\n\nverified: {ans.verified}")
+        for c in ans.citations:
+            print(f"  [{c.doc_id}] \"{c.quote}\"")
+        print(f"\n{ans.answer}\n\nverified: {ans.verified}  ({ans.verification_notes})")
     elif args.cmd == "eval":
         results = end_to_end_eval(agent, load_questions(data_dir / "questions.jsonl"))
         summary = {k: v for k, v in results.items() if k != "rows"}

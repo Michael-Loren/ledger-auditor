@@ -42,10 +42,10 @@ class TransactionStore:
     def __init__(self, txns: list[Transaction]):
         self.txns = txns
 
-    def query(self, description_contains: str = "", category: str = "",
-              date_from: str = "", date_to: str = "",
-              min_amount: float | None = None, max_amount: float | None = None,
-              limit: int = 40) -> dict:
+    def _filter(self, description_contains: str = "", category: str = "",
+                date_from: str = "", date_to: str = "",
+                min_amount: float | None = None,
+                max_amount: float | None = None) -> list[Transaction]:
         rows = []
         for t in self.txns:
             if description_contains and description_contains.lower() not in t.description.lower():
@@ -61,13 +61,51 @@ class TransactionStore:
             if max_amount is not None and t.amount > max_amount:
                 continue
             rows.append(t)
+        return rows
+
+    def query(self, description_contains: str = "", category: str = "",
+              date_from: str = "", date_to: str = "",
+              min_amount: float | None = None, max_amount: float | None = None,
+              group_by: str = "", limit: int = 40) -> dict:
+        rows = self._filter(description_contains, category, date_from, date_to,
+                            min_amount, max_amount)
         total = round(sum(t.amount for t in rows), 2)
-        return {
+        out = {
             "count": len(rows),
             "sum_amount": total,
             "rows": [t.to_dict() for t in rows[:limit]],
             "truncated": len(rows) > limit,
         }
+        # Aggregation is computed HERE, deterministically — never by the LLM.
+        # group_by="amount" answers "how many months at each price tier";
+        # group_by="month" answers "what did this cost per month"; etc.
+        if group_by in ("amount", "description", "category", "month"):
+            buckets: dict = {}
+            for t in rows:
+                key = t.date[:7] if group_by == "month" else getattr(t, group_by)
+                b = buckets.setdefault(key, {"count": 0, "sum_amount": 0.0,
+                                             "first_date": t.date, "last_date": t.date})
+                b["count"] += 1
+                b["sum_amount"] = round(b["sum_amount"] + t.amount, 2)
+                b["first_date"] = min(b["first_date"], t.date)
+                b["last_date"] = max(b["last_date"], t.date)
+            out["groups"] = {str(k): v for k, v in sorted(buckets.items())}
+            del out["rows"], out["truncated"]  # groups replace raw rows
+        return out
+
+    def find_duplicates(self, date_from: str = "", date_to: str = "") -> dict:
+        """Exact-duplicate scan over ALL matching transactions (same date,
+        description, and amount). Exists because the agent's row-limited view
+        cannot reliably do this itself."""
+        seen: dict[tuple, list[Transaction]] = {}
+        for t in self._filter(date_from=date_from, date_to=date_to):
+            if t.amount < 0:  # only debits are interesting
+                seen.setdefault((t.date, t.description, t.amount), []).append(t)
+        dups = [{"date": k[0], "description": k[1], "amount": k[2],
+                 "occurrences": len(v)}
+                for k, v in seen.items() if len(v) > 1]
+        return {"duplicate_groups": dups, "n_transactions_scanned":
+                sum(len(v) for v in seen.values())}
 
 
 # --------------------------------------------------------- Anthropic tool defs
@@ -103,6 +141,28 @@ TOOL_DEFINITIONS = [
                 "date_to": {"type": "string", "description": "ISO date inclusive"},
                 "min_amount": {"type": "number"},
                 "max_amount": {"type": "number"},
+                "group_by": {
+                    "type": "string",
+                    "enum": ["amount", "description", "category", "month"],
+                    "description": "Aggregate matches into buckets with count/"
+                                   "sum/date range, computed deterministically. "
+                                   "Use group_by='amount' to count how many "
+                                   "charges occurred at each price tier, "
+                                   "group_by='month' for per-month totals."},
+            },
+        },
+    },
+    {
+        "name": "find_duplicates",
+        "description": "Scan ALL transactions (not row-limited) for exact "
+                       "duplicates: same date, description, and amount. Always "
+                       "use this for duplicate detection — the row limit on "
+                       "query_transactions makes manual scanning unreliable.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "date_from": {"type": "string", "description": "ISO date inclusive"},
+                "date_to": {"type": "string", "description": "ISO date inclusive"},
             },
         },
     },
@@ -158,6 +218,9 @@ class ToolExecutor:
                      "text": r.chunk.text, "rank": r.rank} for r in results]
         if name == "query_transactions":
             return self.store.query(**{k: v for k, v in args.items() if v not in ("", None)})
+        if name == "find_duplicates":
+            return self.store.find_duplicates(
+                date_from=args.get("date_from", ""), date_to=args.get("date_to", ""))
         if name == "calculate":
             try:
                 return {"result": safe_calculate(args["expression"])}
